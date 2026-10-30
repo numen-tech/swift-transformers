@@ -127,21 +127,35 @@ class BPETokenizer: PreTrainedTokenizerModel, @unchecked Sendable {
     /// Whether the model declares SentencePiece byte fallback.
     let byteFallback: Bool
 
-    static func mergesFromConfig(_ config: Config?) -> [[String]]? {
-        guard let config else { return nil }
+    /// Builds the merge ranks straight from the `merges` list, without an intermediate `[[String]]`.
+    ///
+    /// A merge's rank is its position among the entries that are a list or a legacy `"a b"`
+    /// string (anything else is skipped), and a repeated pair keeps its last rank.
+    static func bpeRanksFromConfig(_ config: Config?) -> [BytePair: Int]? {
+        guard let merges = config?.array() else { return nil }
 
-        if let merges = config.array() {
-            return merges.reduce(into: [[String]]()) { result, element in
-                if let val: [String] = element.get() { // New format (pushed with tokenizers >= 0.20.0): each merge is a list of 2 items
-                    result.append(val)
+        var ranks = [BytePair: Int](minimumCapacity: merges.count)
+        var rank = 0
+        for element in merges {
+            let pair: BytePair
+            if let parts = element.array() {
+                // New format (pushed with tokenizers >= 0.20.0): each merge is a list of 2 items.
+                if parts.count == 2, let a = parts[0].string(), let b = parts[1].string() {
+                    pair = BytePair(a, b)
+                } else if let val: [String] = element.get() {
+                    pair = BytePair(tuple: val)
+                } else {
+                    continue
                 }
-                if let val: String = element.get() { // legacy
-                    result.append(val.unicodeScalars.split(separator: " ", omittingEmptySubsequences: false).map { String($0) })
-                }
+            } else if let val: String = element.get() { // legacy
+                pair = BytePair(tuple: val.unicodeScalars.split(separator: " ", omittingEmptySubsequences: false).map { String($0) })
+            } else {
+                continue
             }
+            ranks[pair] = rank
+            rank += 1
         }
-
-        return nil
+        return ranks
     }
 
     /// Initializes a BPE tokenizer from configuration data.
@@ -152,15 +166,9 @@ class BPETokenizer: PreTrainedTokenizerModel, @unchecked Sendable {
     ///   - addedTokens: Additional tokens to include in the vocabulary
     /// - Throws: `TokenizerError` if required configuration is missing
     required init(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String: Int]) throws {
-        guard let merges = Self.mergesFromConfig(tokenizerData.model.merges) else { fatalError("BPETokenizer requires merges") }
+        guard let bpeRanks = Self.bpeRanksFromConfig(tokenizerData.model.merges) else { fatalError("BPETokenizer requires merges") }
         guard let vocab = tokenizerData.model.vocab.dictionary() else {
             throw TokenizerError.missingVocab
-        }
-        var bpeRanks: [BytePair: Int] = [:]
-        bpeRanks.reserveCapacity(merges.count)
-        for (i, merge) in merges.enumerated() {
-            let bp = BytePair(tuple: merge)
-            bpeRanks[bp] = i
         }
         self.bpeRanks = bpeRanks
 

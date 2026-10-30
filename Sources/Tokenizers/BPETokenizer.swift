@@ -131,9 +131,7 @@ class BPETokenizer: PreTrainedTokenizerModel, @unchecked Sendable {
     ///
     /// A merge's rank is its position among the entries that are a list or a legacy `"a b"`
     /// string (anything else is skipped), and a repeated pair keeps its last rank.
-    static func bpeRanksFromConfig(_ config: Config?) -> [BytePair: Int]? {
-        guard let merges = config?.array() else { return nil }
-
+    static func bpeRanks(merges: [Config]) -> [BytePair: Int] {
         var ranks = [BytePair: Int](minimumCapacity: merges.count)
         var rank = 0
         for element in merges {
@@ -166,11 +164,13 @@ class BPETokenizer: PreTrainedTokenizerModel, @unchecked Sendable {
     ///   - addedTokens: Additional tokens to include in the vocabulary
     /// - Throws: `TokenizerError` if required configuration is missing
     required init(tokenizerConfig: Config, tokenizerData: Config, addedTokens: [String: Int]) throws {
-        guard let bpeRanks = Self.bpeRanksFromConfig(tokenizerData.model.merges) else { fatalError("BPETokenizer requires merges") }
+        guard let merges = tokenizerData.model.merges.array() else { fatalError("BPETokenizer requires merges") }
         guard let vocab = tokenizerData.model.vocab.dictionary() else {
             throw TokenizerError.missingVocab
         }
-        self.bpeRanks = bpeRanks
+        // After the vocabulary check: a malformed merge (fewer than two parts) traps in
+        // `BytePair(tuple:)`, and a tokenizer without a vocabulary throws `missingVocab` first.
+        self.bpeRanks = Self.bpeRanks(merges: merges)
 
         let addedTokens = addedTokens.reduce(into: [BinaryDistinctString: Config]()) { result, element in
             result[BinaryDistinctString(element.key)] = .init(element.value)
